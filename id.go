@@ -74,6 +74,9 @@ const (
 	encoding = "0123456789abcdefghijklmnopqrstuv"
 
 	cGroupPath = "/proc/self/cgroup"
+
+	kubePods = "kubepods"
+	docker   = "docker"
 )
 
 var (
@@ -400,7 +403,7 @@ func inK8S() bool {
 	scanner := bufio.NewScanner(f)
 	for scanner.Scan() {
 		txt := scanner.Text()
-		if strings.Contains(txt, "kubepods") || strings.Contains(txt, "docker") {
+		if strings.Contains(txt, kubePods) || strings.Contains(txt, docker) {
 			return true
 		}
 	}
