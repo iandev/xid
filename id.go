@@ -93,9 +93,9 @@ var (
 	pid = os.Getpid()
 
 	// k8SID stores a value identifying the current running k8s pod environment
-	k8SID = []byte{}
+	k8SID []byte
 
-	// inK8SContext gets eveluated inside the init function, It will be true if we are currenly running inide
+	// inK8SContext gets evaluated inside the init function, It will be true if we are currenly running inside
 	// a k8s environment.
 	inK8SContext = false
 
@@ -126,7 +126,9 @@ func init() {
 		// k8SID stores a value identifying the current running k8s/docker environment
 		k8SID, err = readk8SID()
 		if err != nil {
-			k8SID = make([]byte, 5)
+			// if we couldn't generate the k8SID, proceed as if we are not running inside k8s/container
+			// fall back on the pid and hostname
+			inK8SContext = false
 		}
 	}
 }
@@ -167,6 +169,7 @@ func New() ID {
 	var id ID
 	// Timestamp, 4 bytes, big endian
 	binary.BigEndian.PutUint32(id[:], uint32(time.Now().Unix()))
+	// unique k8s / docker ID
 	if inK8SContext {
 		id[4] = k8SID[0]
 		id[5] = k8SID[1]
