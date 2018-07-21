@@ -425,6 +425,7 @@ func readk8SID() ([]byte, error) {
 		return md5id, err
 	}
 
+	// copy first 5 bytes from the md5 hash of the file to md5id
 	copy(md5id, hash.Sum(nil)[:5])
 
 	return md5id, nil
