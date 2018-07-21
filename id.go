@@ -42,6 +42,8 @@
 package xid
 
 import (
+	"bufio"
+	"bytes"
 	"crypto/md5"
 	"crypto/rand"
 	"database/sql/driver"
@@ -49,12 +51,13 @@ import (
 	"errors"
 	"fmt"
 	"hash/crc32"
+	"io"
 	"io/ioutil"
 	"os"
+	"sort"
+	"strings"
 	"sync/atomic"
 	"time"
-	"bytes"
-	"sort"
 )
 
 // Code inspired from mgo/bson ObjectId
@@ -69,6 +72,8 @@ const (
 	// encoding stores a custom version of the base32 encoding with lower case
 	// letters.
 	encoding = "0123456789abcdefghijklmnopqrstuv"
+
+	cGroupPath = "/proc/self/cgroup"
 )
 
 var (
@@ -86,6 +91,13 @@ var (
 
 	// pid stores the current process id
 	pid = os.Getpid()
+
+	// k8SID stores a value identifying the current running k8s pod environment
+	k8SID = []byte{}
+
+	// inK8SContext gets eveluated inside the init function, It will be true if we are currenly running inide
+	// a k8s environment.
+	inK8SContext = false
 
 	nilID ID
 
@@ -107,6 +119,15 @@ func init() {
 	b, err := ioutil.ReadFile("/proc/self/cpuset")
 	if err == nil && len(b) > 1 {
 		pid ^= int(crc32.ChecksumIEEE(b))
+	}
+
+	inK8SContext = inK8S()
+	if inK8SContext {
+		// k8SID stores a value identifying the current running k8s/docker environment
+		k8SID, err = readk8SID()
+		if err != nil {
+			k8SID = make([]byte, 5)
+		}
 	}
 }
 
@@ -146,13 +167,21 @@ func New() ID {
 	var id ID
 	// Timestamp, 4 bytes, big endian
 	binary.BigEndian.PutUint32(id[:], uint32(time.Now().Unix()))
-	// Machine, first 3 bytes of md5(hostname)
-	id[4] = machineID[0]
-	id[5] = machineID[1]
-	id[6] = machineID[2]
-	// Pid, 2 bytes, specs don't specify endianness, but we use big endian.
-	id[7] = byte(pid >> 8)
-	id[8] = byte(pid)
+	if inK8SContext {
+		id[4] = k8SID[0]
+		id[5] = k8SID[1]
+		id[6] = k8SID[2]
+		id[7] = k8SID[3]
+		id[8] = k8SID[4]
+	} else {
+		// Machine, first 3 bytes of md5(hostname)
+		id[4] = machineID[0]
+		id[5] = machineID[1]
+		id[6] = machineID[2]
+		// Pid, 2 bytes, specs don't specify endianness, but we use big endian.
+		id[7] = byte(pid >> 8)
+		id[8] = byte(pid)
+	}
 	// Increment, 3 bytes, big endian
 	i := atomic.AddUint32(&objectIDCounter, 1)
 	id[9] = byte(i >> 16)
@@ -339,7 +368,6 @@ func (id ID) Compare(other ID) int {
 	return bytes.Compare(id[:], other[:])
 }
 
-
 type sorter []ID
 
 func (s sorter) Len() int {
@@ -358,4 +386,40 @@ func (s sorter) Swap(i, j int) {
 // It works by wrapping `[]ID` and use `sort.Sort`.
 func Sort(ids []ID) {
 	sort.Sort(sorter(ids))
+}
+
+func inK8S() bool {
+	f, err := os.Open(cGroupPath)
+	if err != nil {
+		return false
+	}
+	defer f.Close()
+	scanner := bufio.NewScanner(f)
+	for scanner.Scan() {
+		txt := scanner.Text()
+		if strings.Contains(txt, "kubepods") || strings.Contains(txt, "docker") {
+			return true
+		}
+	}
+	return false
+}
+
+func readk8SID() ([]byte, error) {
+	md5id := make([]byte, 5)
+
+	file, err := os.Open(cGroupPath)
+	if err != nil {
+		return md5id, err
+	}
+	defer file.Close()
+
+	hash := md5.New()
+
+	if _, err := io.Copy(hash, file); err != nil {
+		return md5id, err
+	}
+
+	copy(md5id, hash.Sum(nil)[:5])
+
+	return md5id, nil
 }
